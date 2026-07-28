@@ -63,3 +63,6 @@ scratch/
 
 # client-facing delivery summary — kept local, not for the public repo
 DELIVERY.md
+
+# design docs kept local / in the client package, not the public repo
+docs/

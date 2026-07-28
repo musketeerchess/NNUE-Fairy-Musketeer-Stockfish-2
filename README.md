@@ -34,7 +34,6 @@ play_human.py      play a game move-by-move against a model
 webplay.py         browser board to play a model (with placement phase)
 arena.py           self-play round-robin between models; prunes weak nets
 export_weights.py  export a trained model to a portable .npz + .json
-docs/              design and reference documents
 ```
 
 Not tracked in this repository (large or environment-specific): the engine
