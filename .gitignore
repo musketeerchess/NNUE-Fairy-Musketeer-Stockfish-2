@@ -1,0 +1,62 @@
+# ─── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# ─── Confidential data (client-owned) — NEVER COMMIT ──────
+# Zied's self-play PGN game database is proprietary. Ignore PGNs anywhere
+# (they also live in the project root, not just data/raw/).
+*.pgn
+*.epd
+# parsed dataset + logs (large, regenerable from the pipeline)
+data/processed/*.jsonl
+data/processed/*.plain
+data/processed/*.log
+data/processed/*.txt
+# encoded feature caches
+*.npz
+.cache*.npz
+data/processed/.cache*
+
+# ─── Trained models & artifacts (large / derived) ─────────
+# Train them with train/run_full.py or the Colab notebook.
+models/*
+!models/.gitkeep
+
+# ─── Private engine binaries ──────────────────────────────
+# Zied's private Fairy-Stockfish build — do not commit or redistribute.
+engine/
+*.exe
+*.zip
+
+# ─── Cloned third-party repos ─────────────────────────────
+third_party/
+
+# ─── Editor / OS / tooling ────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# tooling/editor local config
+.claude/
+
+# scratch / temp
+/tmp/
+scratch/
+*.tmp
