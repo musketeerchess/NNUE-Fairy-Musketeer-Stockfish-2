@@ -286,12 +286,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--net", default="model3")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--depth", type=int, default=2,
+                    help="search depth in plies (1=fast/greedy, 2=stronger, 3=slow)")
     args = ap.parse_args()
     global ARB, PLAYER, PAGE
     players = {p.name: p for p in load_players()}
     if args.net not in players:
         raise SystemExit(f"net '{args.net}' not found; have {list(players)}")
     PLAYER = players[args.net]
+    PLAYER.depth = args.depth
     PAGE = PAGE.replace("<span id=netname>model</span>",
                         f"<span id=netname>{args.net}</span>")
     ARB = Arbiter()

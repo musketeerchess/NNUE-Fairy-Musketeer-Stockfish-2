@@ -114,14 +114,21 @@ class Arbiter:
 # --------------------------------------------------------------------------- #
 # Net players
 # --------------------------------------------------------------------------- #
+MATE = 30000.0
+
+
 class NetPlayer:
-    def __init__(self, name: str, model, encoder, gating: bool = False):
+    def __init__(self, name: str, model, encoder, gating: bool = False,
+                 depth: int = 1):
         self.name = name
         self.model = model.eval()
         self.encoder = encoder
         self.gating = gating
+        self.depth = depth        # search depth in plies (1 = greedy)
 
-    def _eval(self, fen: str) -> float:
+    def eval_stm(self, fen: str) -> float:
+        """Network evaluation from the perspective of the side to move in `fen`
+        (higher = better for that side)."""
         x = torch.from_numpy(self.encoder(fen, VARIANT_MEN)).unsqueeze(0)
         with torch.no_grad():
             if self.gating:
@@ -133,16 +140,47 @@ class NetPlayer:
                 q = self.model(x)
         return float(q.item())
 
-    def choose(self, arb: Arbiter, start: str, stack: list[str], moves: list[str]) -> str:
-        # child fen's side-to-move is the opponent; minimise their eval.
-        childs = arb.child_fens(start, stack, moves)
-        best, best_mv = float("inf"), moves[0]
-        for mv, cf in zip(moves, childs):
-            if cf is None:
-                continue
-            e = self._eval(cf)
-            if e < best:
-                best, best_mv = e, mv
+    # negamax with alpha-beta; value is from the side-to-move's perspective
+    def _negamax(self, arb, start, stack, depth, alpha, beta):
+        moves = arb.legal_moves(start, stack)
+        if not moves:                                   # terminal
+            _, in_check = arb.board(start, stack)
+            return -MATE if in_check else 0.0           # mated = very bad for stm
+        if depth == 0:
+            fen, _ = arb.board(start, stack)
+            return self.eval_stm(fen)
+        best = -1e9
+        for m in moves:
+            v = -self._negamax(arb, start, stack + [m], depth - 1, -beta, -alpha)
+            if v > best:
+                best = v
+            if best > alpha:
+                alpha = best
+            if alpha >= beta:
+                break                                   # prune
+        return best
+
+    def choose(self, arb: Arbiter, start: str, stack: list[str],
+               moves: list[str]) -> str:
+        # depth-1 fast path: minimise the opponent's evaluation on each child.
+        if self.depth <= 1:
+            childs = arb.child_fens(start, stack, moves)
+            best, best_mv = 1e9, moves[0]
+            for mv, cf in zip(moves, childs):
+                if cf is None:
+                    continue
+                e = self.eval_stm(cf)                   # cf's stm is the opponent
+                if e < best:
+                    best, best_mv = e, mv
+            return best_mv
+        # deeper: negamax search
+        best, best_mv, alpha = -1e9, moves[0], -1e9
+        for m in moves:
+            v = -self._negamax(arb, start, stack + [m], self.depth - 1, -1e9, -alpha)
+            if v > best:
+                best, best_mv = v, m
+            if best > alpha:
+                alpha = best
         return best_mv
 
 
