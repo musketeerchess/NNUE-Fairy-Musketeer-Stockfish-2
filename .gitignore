@@ -60,3 +60,6 @@ Thumbs.db
 /tmp/
 scratch/
 *.tmp
+
+# client-facing delivery summary — kept local, not for the public repo
+DELIVERY.md
