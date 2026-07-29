@@ -40,7 +40,7 @@ import torch
 import torch.nn as nn
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from features import encode_fen_model3               # noqa: E402
+from features import encode_fen_model3, N_FEATURES_M3   # noqa: E402
 
 SCALE = 361.0
 VARIANT_MEN = ("P:fmWfceFifmnD;N:N;B:B;R:R;Q:Q;E:FWDA;C:FWDsN;A:BN;F:B3vND;"
@@ -51,7 +51,8 @@ class Model3(nn.Module):
     def __init__(self, width: int = 512, hidden: int = 2):
         super().__init__()
         self.layers = nn.ModuleList(
-            [nn.Linear(128, width)] + [nn.Linear(width, width) for _ in range(hidden)])
+            [nn.Linear(N_FEATURES_M3, width)]
+            + [nn.Linear(width, width) for _ in range(hidden)])
         self.output = nn.Linear(width, 1)
 
     def forward(self, x):

@@ -28,23 +28,26 @@ without touching the training loop.
 from __future__ import annotations
 
 import collections
+import math
 
 import numpy as np
 
 from betza import Piece, generate_targets
 from musketeer import Board, WHITE, BLACK
 
-# Approximate Musketeer piece values (centipawns).  Exact numbers matter little
-# to a learned net -- they mainly give each piece type a distinct signature.
+# Authoritative Musketeer piece values, taken from the Musketeer Stockfish
+# engine source (`types.h`, midgame values on a Pawn=171 scale) and normalised
+# here to Pawn=100 (value_engine / 1.71, rounded).  Note Unicorn (926) is
+# slightly stronger than Hawk (899), and both are near-queen-in-power leapers.
 PIECE_VALUE: dict[str, int] = {
-    "P": 100, "N": 320, "B": 330, "R": 500, "Q": 900, "K": 0,
-    "H": 700, "U": 550,                      # Hawk, Unicorn (Musketeer)
-    # remaining basket pieces, for generality
-    "E": 750, "C": 600, "A": 650, "F": 700, "M": 850, "S": 500,
-    "D": 1100, "L": 550, "J": 500, "G": 500, "I": 500, "O": 500,
-    "T": 500, "V": 500, "W": 500, "X": 500, "Y": 500, "Z": 500,
+    "P": 100, "N": 447, "B": 483, "R": 750, "Q": 1462, "K": 0,
+    "H": 899, "U": 926,                      # Hawk, Unicorn (Musketeer)
+    # remaining basket pieces (engine types.h, same normalisation)
+    "E": 1035, "C": 1000, "A": 1191, "F": 1144, "M": 1316, "S": 1357,
+    "D": 1918, "L": 964, "J": 900, "G": 900, "I": 900, "O": 900,
+    "T": 900, "V": 900, "W": 900, "X": 900, "Y": 900, "Z": 900,
 }
-SCALE = 1000.0          # normalise values into roughly [-1.1, 1.1]
+SCALE = 1000.0          # normalise values (Pawn -> 0.1); Amazon peaks near 1.9
 N_FEATURES = 128
 
 
@@ -100,7 +103,10 @@ def gating_finished(board: Board) -> bool:
 #   * colour-boundness = (# controlled squares of e4's colour) / (total);
 #   * infinite-range flag (does the piece have an unlimited rider, like a queen).
 E4 = (4, 3)
-GEOM_KEYS = ("d1", "d2", "d3", "d4", "total", "colour_boundness", "infinite")
+# 8th feature "directions" = number of distinct directions the piece can move in
+# (knight=8, bishop=4, ...), matching the client's relative-value methodology.
+GEOM_KEYS = ("d1", "d2", "d3", "d4", "total", "colour_boundness",
+             "infinite", "directions")
 
 
 _GEOM_CACHE: dict[str, dict[str, float]] = {}
@@ -118,12 +124,20 @@ def piece_geometry(piece: Piece) -> dict[str, float]:
     e4_parity = (E4[0] + E4[1]) % 2
     bound = sum(1 for tf, tr in targets if (tf + tr) % 2 == e4_parity)
     infinite = any(c.rider and c.max_range == 0 for c in piece.components)
+    # distinct directions: reduce every controlled vector to its primitive
+    # direction (divide by gcd) so a slider's ray counts once, then count.
+    prim = set()
+    for tf, tr in targets:
+        dx, dy = tf - E4[0], tr - E4[1]
+        gg = math.gcd(abs(dx), abs(dy)) or 1
+        prim.add((dx // gg, dy // gg))
     g = {
         "d1": dist.get(1, 0), "d2": dist.get(2, 0),
         "d3": dist.get(3, 0), "d4": dist.get(4, 0),
         "total": total,
         "colour_boundness": (bound / total) if total else 0.0,
         "infinite": 1.0 if infinite else 0.0,
+        "directions": len(prim),
     }
     _GEOM_CACHE[piece.letter] = g
     return g
@@ -132,20 +146,23 @@ def piece_geometry(piece: Piece) -> dict[str, float]:
 # Piece types this variant fields, in a fixed order for the feature layout.
 MODEL3_TYPES = ("P", "N", "B", "R", "Q", "K", "H", "U")
 _GEOM_SCALE = {"d1": 8.0, "d2": 8.0, "d3": 8.0, "d4": 8.0, "total": 27.0,
-               "colour_boundness": 1.0, "infinite": 1.0}
+               "colour_boundness": 1.0, "infinite": 1.0, "directions": 16.0}
+N_GEOM = len(GEOM_KEYS)                                   # 8 geometry features
+N_FEATURES_M3 = 64 + len(MODEL3_TYPES) * N_GEOM + 8       # 64 + 64 + 8 = 136
 
 
 def encode_board_model3(board: Board) -> np.ndarray:
     """
-    Model-3 128-input vector (always 128, regardless of gating):
+    Model-3 input vector (length N_FEATURES_M3 = 136):
 
-      [  0: 64]  board material plane, signed & side-to-move oriented   (64)
-      [ 64:120]  8 piece types x 7 Betza-geometry features, each weighted
-                 by the signed on-board count of that type (own +, opp -) (56)
-      [120:128]  gating presence per file: own waiting +1, opp waiting -1  (8)
+      [  0: 64]  board material plane, signed & side-to-move oriented       (64)
+      [ 64:128]  8 piece types x 8 Betza-geometry features (incl. "directions"),
+                 each weighted by the signed on-board count of that type     (64)
+      [128:136]  gating presence per file: own waiting +1, opp waiting -1     (8)
     """
-    x = np.zeros(128, dtype=np.float32)
+    x = np.zeros(N_FEATURES_M3, dtype=np.float32)
     stm = board.side
+    gate_base = 64 + len(MODEL3_TYPES) * N_GEOM           # = 128
 
     # board plane
     counts: dict[str, int] = collections.defaultdict(int)
@@ -162,16 +179,16 @@ def encode_board_model3(board: Board) -> np.ndarray:
         if pc is None:
             continue
         g = piece_geometry(pc)
-        base = 64 + ti * 7
+        base = 64 + ti * N_GEOM
         net = counts.get(letter, 0)
         for ki, k in enumerate(GEOM_KEYS):
             x[base + ki] = (g[k] / _GEOM_SCALE[k]) * net
 
     # gating presence per file
     for f, _ in board.white_wait.items():
-        x[120 + f] += (1.0 if WHITE == stm else -1.0)
+        x[gate_base + f] += (1.0 if WHITE == stm else -1.0)
     for f, _ in board.black_wait.items():
-        x[120 + f] += (1.0 if BLACK == stm else -1.0)
+        x[gate_base + f] += (1.0 if BLACK == stm else -1.0)
     return x
 
 

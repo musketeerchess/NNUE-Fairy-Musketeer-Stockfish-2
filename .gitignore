@@ -66,3 +66,8 @@ DELIVERY.md
 
 # design docs kept local / in the client package, not the public repo
 docs/
+
+# client engine source & binary (CONFIDENTIAL — never publish)
+src_v2/
+engine_v2/
+*.docx
