@@ -40,7 +40,7 @@ import torch
 import torch.nn as nn
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from features import encode_fen_model3, N_FEATURES_M3   # noqa: E402
+from features import encode_fen_model3, N_FEATURES_M3, set_model3_types  # noqa: E402
 
 SCALE = 361.0
 VARIANT_MEN = ("P:fmWfceFifmnD;N:N;B:B;R:R;Q:Q;E:FWDA;C:FWDsN;A:BN;F:B3vND;"
@@ -61,14 +61,15 @@ class Model3(nn.Module):
         return self.output(x)
 
 
-def load_dataset(patterns, limit):
+def load_dataset(patterns, limit, variant_men=None):
+    variant_men = variant_men or VARIANT_MEN
     files = []
     for p in patterns:
         files.extend(sorted(glob.glob(p)))
     if not files:
         raise SystemExit(f"no files matched {patterns}")
     key = os.path.join(os.path.dirname(files[0]),
-                       f".cache3_{abs(hash((tuple(files), limit))) & 0xffffffff}.npz")
+                       f".cache3_{abs(hash((tuple(files), limit, variant_men))) & 0xffffffff}.npz")
     if os.path.exists(key):
         d = np.load(key)
         print(f"loaded cache {key}: {len(d['X'])} rows")
@@ -81,7 +82,7 @@ def load_dataset(patterns, limit):
                 rec = json.loads(line)
                 if rec.get("result_stm") is None:
                     continue
-                X.append(encode_fen_model3(rec["fen"], VARIANT_MEN))
+                X.append(encode_fen_model3(rec["fen"], variant_men))
                 S.append(rec["score_cp"])
                 R.append((rec["result_stm"] + 1) / 2.0)
                 if limit and len(X) >= limit:
@@ -96,7 +97,11 @@ def load_dataset(patterns, limit):
 
 def train(args):
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    X, S, R = load_dataset(glob.glob(args.data) or [args.data], args.limit)
+    if args.model3_types:
+        set_model3_types(args.model3_types.split(","))
+        print(f"Model-3 geometry types: {args.model3_types}")
+    X, S, R = load_dataset(glob.glob(args.data) or [args.data], args.limit,
+                           variant_men=args.variant_men)
     X = torch.from_numpy(X); S = torch.from_numpy(S); R = torch.from_numpy(R)
     n = len(X); perm = torch.randperm(n); n_val = max(1, int(n * 0.05))
     val_idx, tr_idx = perm[:n_val], perm[n_val:]
@@ -144,6 +149,11 @@ def main():
     ap.add_argument("--hidden", type=int, default=2)
     ap.add_argument("--lam", type=float, default=0.7)
     ap.add_argument("--out", default="models/model3.pt")
+    ap.add_argument("--variant-men", dest="variant_men", default=None,
+                    help="VariantMen string (defaults to the Hawk/Unicorn set)")
+    ap.add_argument("--model3-types", dest="model3_types", default=None,
+                    help="comma-separated 8 piece types for the geometry block "
+                         "(e.g. P,N,B,R,Q,K,I,J for the asymmetric games)")
     train(ap.parse_args())
 
 

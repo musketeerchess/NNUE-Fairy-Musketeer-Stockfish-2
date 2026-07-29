@@ -71,3 +71,7 @@ docs/
 src_v2/
 engine_v2/
 *.docx
+
+# new game data + generated rule files (CONFIDENTIAL)
+data/games_new/
+*.ini

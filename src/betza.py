@@ -260,8 +260,24 @@ def parse_piece(letter: str, betza: str) -> Piece:
     )
 
 
+# Built-in rules for the standard pieces, used by the engine when a piece is
+# NOT listed in VariantMen (per the client's note: standard pieces are
+# "programmed directly on Stockfish", only custom ones appear in the header /
+# variants.ini).  Newer PGNs omit the pawn (and sometimes others), so we fill
+# these in as defaults.
+DEFAULT_PIECES: dict[str, str] = {
+    "P": "fmWfceFifmnD",   # pawn: push, initial double push, diagonal capture + e.p.
+    "N": "N", "B": "B", "R": "R", "Q": "Q",
+    "K": "K",              # king step; castling handled by the board via SAN O-O
+}
+
+
 def parse_variant_men(variant_men: str) -> dict[str, Piece]:
-    """Parse a full VariantMen header string into {LETTER: Piece}."""
+    """Parse a full VariantMen header string into {LETTER: Piece}.
+
+    Any standard piece (P, N, B, R, Q, K) absent from the header is filled in
+    with its built-in default rule, matching the engine's behaviour.
+    """
     pieces: dict[str, Piece] = {}
     for chunk in variant_men.strip().split(";"):
         chunk = chunk.strip()
@@ -269,6 +285,9 @@ def parse_variant_men(variant_men: str) -> dict[str, Piece]:
             continue
         letter, betza = chunk.split(":", 1)
         pieces[letter.strip().upper()] = parse_piece(letter.strip(), betza.strip())
+    for letter, betza in DEFAULT_PIECES.items():
+        if letter not in pieces:
+            pieces[letter] = parse_piece(letter, betza)
     return pieces
 
 

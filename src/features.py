@@ -151,6 +151,17 @@ N_GEOM = len(GEOM_KEYS)                                   # 8 geometry features
 N_FEATURES_M3 = 64 + len(MODEL3_TYPES) * N_GEOM + 8       # 64 + 64 + 8 = 136
 
 
+def set_model3_types(types) -> None:
+    """Override which 8 piece types the Model-3 geometry block encodes (e.g.
+    for asymmetric armies with custom pieces).  Count must stay the same so the
+    input dimension (N_FEATURES_M3) is unchanged."""
+    global MODEL3_TYPES
+    types = tuple(t.strip().upper() for t in types)
+    if len(types) != len(MODEL3_TYPES):
+        raise ValueError(f"need exactly {len(MODEL3_TYPES)} types, got {len(types)}")
+    MODEL3_TYPES = types
+
+
 def encode_board_model3(board: Board) -> np.ndarray:
     """
     Model-3 input vector (length N_FEATURES_M3 = 136):

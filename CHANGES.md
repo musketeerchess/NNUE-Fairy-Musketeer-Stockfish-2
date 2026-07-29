@@ -5,6 +5,61 @@ Kept per the client's request to track changes clearly.
 
 ---
 
+## 2026-07-29 — New asymmetric-army games: parser fix + engine re-evaluation
+
+### 1. Parser handles pieces omitted from VariantMen (built-in rules)
+The new game PGNs omit standard pieces (e.g. the pawn) from `VariantMen`, since
+those use the engine's built-in rules ("programmed directly on Stockfish").
+Added default rules for standard pieces (`P, N, B, R, Q, K`) in
+`src/betza.py::parse_variant_men`. Replay of the new games rose from ~0% to
+~100% (e.g. `ii vs jj` 676/676, `standard_chess` 1353/1353).
+
+### 2. Confirmed the games use *redefined* custom pieces
+The new tournaments redefine pieces via `VariantMen`, e.g. `H:ZW`, `U:B2D`,
+`I:ZD`, `J:ZW`, `Z:B2R2`, and use **asymmetric armies** (different pieces/counts
+per side). These are the "next phase" data.
+
+### 3. Built an engine re-evaluation pipeline (games have no evals)
+The new PGNs contain only moves + result, no inline evaluations. Added
+`scripts/reeval_games.py`, which:
+- generates a `variants.ini` from each PGN's `VariantMen` (so the engine uses
+  the exact tournament rules), and loads it via `VariantPath`;
+- replays each game and asks the engine to evaluate every position;
+- emits `(fen, score_cp, move, ply, result)` records (same schema as the parser).
+
+**Critical validation** (matches the client's `variants.ini` reminder): without
+the generated ini the engine mis-moves the custom pieces (it moved `I` as a
+knight); with the ini, `I` correctly moves as `ZD` (zebra + dabbaba). NOTE: the
+engine's ini path must be a Windows-style path or it silently fails to open; the
+re-eval loop restarts the engine on pipe failure (62 restarts over the full
+file, 0 positions lost).
+
+### 4. First asymmetric-army dataset and model
+Re-evaluated the full `ii vs jj` file: **676 games -> 111,791 eval-labeled
+positions** (`data/processed/reeval_ii_jj.jsonl`). Trained a first asymmetric
+Model 1 (MK128) on it: validation loss 0.0485 -> **0.0344** over 25 epochs,
+clean convergence (`models/model1_asym.pt`). This exercises the full pipeline on
+asymmetric armies with custom pieces.
+
+### 5. Full asymmetric set of 4 models
+Trained Models 2, 3, 4 on the 111,791-position asymmetric dataset. Model 3 was
+given the custom pieces in its geometry block via a new option
+(`train/model3.py --variant-men ... --model3-types P,N,B,R,Q,K,I,J`, backed by
+`features.set_model3_types`), so its Betza-geometry features describe the actual
+`I`(=ZD)/`J`(=ZW) pieces.
+
+Asymmetric validation loss: Model 1 = 0.0344, Model 2 = 0.0314,
+**Model 3 = 0.0213 (best by a wide margin)**, Model 4 = 0.0351. Model 3's
+Betza-feature approach wins even more decisively on asymmetric armies than on
+symmetric, confirming the value of encoding per-piece geometry for custom pieces.
+Saved as `models/model{1,2,3,4}_asym.pt`.
+
+**Remaining refinement:** the *material* value for custom pieces in the MK128
+encoding is still a placeholder; wiring the engine/client cp values would
+further help Models 1/2/4 (Model 3 already benefits from geometry).
+
+---
+
 ## 2026-07-28 — Piece values from the engine + "directions" feature
 
 ### 1. Adopted the engine's authoritative piece values
