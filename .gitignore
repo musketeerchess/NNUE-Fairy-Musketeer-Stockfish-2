@@ -75,3 +75,8 @@ engine_v2/
 # new game data + generated rule files (CONFIDENTIAL)
 data/games_new/
 *.ini
+
+# client piece-value data (CONFIDENTIAL, derived from his spreadsheet)
+data/piece_values_cp.json
+*.xls
+*.xlsx

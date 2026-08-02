@@ -50,6 +50,54 @@ PIECE_VALUE: dict[str, int] = {
 SCALE = 1000.0          # normalise values (Pawn -> 0.1); Amazon peaks near 1.9
 N_FEATURES = 128
 
+# --------------------------------------------------------------------------- #
+# Client cp piece values (Recap sheet), keyed by Betza. These are the relative
+# piece values in centipawns (pawn ~ 110) and are the preferred material signal.
+# --------------------------------------------------------------------------- #
+import json as _json
+import os as _os
+
+_CP_PATH = _os.path.join(_os.path.dirname(__file__), "..", "data",
+                         "piece_values_cp.json")
+try:
+    _CP_TABLE = _json.load(open(_CP_PATH, encoding="utf-8"))
+except Exception:
+    _CP_TABLE = {}
+
+# ACTIVE_VALUES maps a piece LETTER to its material value for the current variant.
+# Defaults to the static table; configure_piece_values() overrides it with the
+# client's cp values by mapping each letter's Betza (from VariantMen) to a cp.
+ACTIVE_VALUES: dict[str, float] = dict(PIECE_VALUE)
+
+
+def piece_cp(betza: str):
+    """Client cp (midgame) value for a Betza string, or None if not in the table."""
+    v = _CP_TABLE.get(betza)
+    return v["cp_mg"] if v else None
+
+
+def configure_piece_values(variant_men: str) -> dict:
+    """Build the letter -> cp value map for a variant from the client's table.
+    Falls back to the static PIECE_VALUE for anything not found."""
+    global ACTIVE_VALUES
+    vm = {}
+    for chunk in variant_men.split(";"):
+        if ":" in chunk:
+            letter, betza = chunk.split(":", 1)
+            vm[letter.strip().upper()] = betza.strip()
+    values = dict(PIECE_VALUE)
+    for letter, betza in vm.items():
+        cp = piece_cp(betza)
+        if cp is not None:
+            values[letter] = cp
+    values["K"] = 0
+    ACTIVE_VALUES = values
+    return values
+
+
+def _val(letter: str) -> float:
+    return ACTIVE_VALUES.get(letter, PIECE_VALUE.get(letter, 500))
+
 
 def _orient(f: int, r: int, stm: int) -> tuple[int, int]:
     """Board square as seen by the side to move (mirror vertically for Black)."""
@@ -66,7 +114,7 @@ def encode_board(board: Board) -> np.ndarray:
         of, orr = _orient(f, r, stm)
         idx = orr * 8 + of
         sign = 1.0 if color == stm else -1.0
-        x[idx] = sign * PIECE_VALUE.get(letter, 500) / SCALE
+        x[idx] = sign * _val(letter) / SCALE
 
     # --- gating plane (64..127) ---
     # White waiting pieces gate onto (file, 0); Black's onto (file, 7).
@@ -74,12 +122,12 @@ def encode_board(board: Board) -> np.ndarray:
         of, orr = _orient(f, 0, stm)
         idx = 64 + orr * 8 + of
         sign = 1.0 if WHITE == stm else -1.0
-        x[idx] = sign * PIECE_VALUE.get(letter, 500) / SCALE
+        x[idx] = sign * _val(letter) / SCALE
     for f, letter in board.black_wait.items():
         of, orr = _orient(f, 7, stm)
         idx = 64 + orr * 8 + of
         sign = 1.0 if BLACK == stm else -1.0
-        x[idx] = sign * PIECE_VALUE.get(letter, 500) / SCALE
+        x[idx] = sign * _val(letter) / SCALE
 
     return x
 
@@ -181,7 +229,7 @@ def encode_board_model3(board: Board) -> np.ndarray:
         of, orr = _orient(f, r, stm)
         idx = orr * 8 + of
         sign = 1.0 if color == stm else -1.0
-        x[idx] = sign * PIECE_VALUE.get(letter, 500) / SCALE
+        x[idx] = sign * _val(letter) / SCALE
         counts[letter] += sign  # net (own - opp) count per type
 
     # geometry x signed-count
@@ -205,6 +253,73 @@ def encode_board_model3(board: Board) -> np.ndarray:
 
 def encode_fen_model3(fen: str, variant_men: str) -> np.ndarray:
     return encode_board_model3(Board.from_fen(fen, variant_men))
+
+
+# --------------------------------------------------------------------------- #
+# 512-input encoding (the client's proposed NNUE layer-1 layout)
+#   [  0: 64]  material: signed cp value per square, side-to-move oriented   (64)
+#   [ 64: 80]  gating: white waiting cp per file (8) then black (8)          (16)
+#   [ 80:512]  geometry: 24 piece types x 18 features, weighted by signed
+#              on-board count. Per type: elemental atoms (W,F,D,N,A,C,Z,G,H),
+#              sliders (B,R,Q), controlled squares D1..D4, colour-boundness,
+#              and number of directions.                                    (432)
+# Total 512. Configurable so 256 / 384 / 512 ablations are easy.
+# --------------------------------------------------------------------------- #
+GEOM512_TYPES = "PNBRQKHUECAFMSDLGIJOTVWZ"      # 24 piece letters
+ATOMS512 = "WFDNACZGH"                          # elemental leaper atoms (9)
+SLIDERS512 = "BRQ"                              # riders (3)
+PER_TYPE512 = len(ATOMS512) + len(SLIDERS512) + 4 + 2      # 18
+N_FEATURES_512 = 64 + 16 + len(GEOM512_TYPES) * PER_TYPE512  # 64 + 16 + 432 = 512
+
+
+def _betza_map(variant_men: str) -> dict:
+    m = {}
+    for ch in variant_men.split(";"):
+        if ":" in ch:
+            letter, betza = ch.split(":", 1)
+            m[letter.strip().upper()] = betza.strip()
+    return m
+
+
+def encode_board_512(board: Board, betza_map: dict) -> np.ndarray:
+    x = np.zeros(N_FEATURES_512, dtype=np.float32)
+    stm = board.side
+    counts: dict[str, float] = collections.defaultdict(float)
+
+    # material plane
+    for (f, r), (letter, color) in board.board.items():
+        of, orr = _orient(f, r, stm)
+        sign = 1.0 if color == stm else -1.0
+        x[orr * 8 + of] = sign * _val(letter) / SCALE
+        counts[letter] += sign
+
+    # gating (16): white waiting per file, then black waiting per file
+    for f, letter in board.white_wait.items():
+        x[64 + f] += (1.0 if WHITE == stm else -1.0) * _val(letter) / SCALE
+    for f, letter in board.black_wait.items():
+        x[72 + f] += (1.0 if BLACK == stm else -1.0) * _val(letter) / SCALE
+
+    # geometry block
+    base0 = 80
+    for ti, letter in enumerate(GEOM512_TYPES):
+        pc = board.pieces.get(letter)
+        net = counts.get(letter, 0.0)
+        if pc is None or net == 0.0:
+            continue
+        betza = betza_map.get(letter, "")
+        g = piece_geometry(pc)
+        desc = [1.0 if a in betza else 0.0 for a in ATOMS512]
+        desc += [1.0 if s in betza else 0.0 for s in SLIDERS512]
+        desc += [g["d1"] / 8, g["d2"] / 8, g["d3"] / 8, g["d4"] / 8]
+        desc += [g["colour_boundness"], g["directions"] / 32.0]
+        base = base0 + ti * PER_TYPE512
+        for k, dv in enumerate(desc):
+            x[base + k] = dv * net
+    return x
+
+
+def encode_fen_512(fen: str, variant_men: str) -> np.ndarray:
+    return encode_board_512(Board.from_fen(fen, variant_men), _betza_map(variant_men))
 
 
 if __name__ == "__main__":

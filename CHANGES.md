@@ -5,6 +5,26 @@ Kept per the client's request to track changes clearly.
 
 ---
 
+## 2026-07-29 (evening) — Client cp values and the 512 architecture
+
+### 1. Ingested the client's cp piece values
+Read the client's spreadsheet (Recap sheet) into `data/piece_values_cp.json`
+(1,041 pieces, keyed by Betza: cp midgame, cp endgame, and the SPSA versions).
+Wired into `src/features.py` via `configure_piece_values(variant_men)`, which
+maps each piece letter to its cp value through its Betza. All encoders now use
+these when configured. Verified values: Hawk (ADGH) 504, Unicorn (NC) 568,
+I (ZD) 400, J (ZW) 484, Queen 999. These are the client's relative cp values, not
+the SPSA search numbers, which is what he recommended for the material feature.
+
+### 2. Built the client's 512-input encoder and network
+`features.encode_fen_512` implements his layer-1 layout: 64 material (cp) + 16
+gating + 432 Betza geometry (elemental atoms W,F,D,N,A,C,Z,G,H; sliders B,R,Q;
+controlled squares D1..D4; colour-boundness; directions) across 24 piece types,
+weighted by signed on-board count. Total 512. `train/model512.py` is the network
+512 -> 512 -> 512 -> 512 -> 1 with clipped ReLU (about 1.05M params). Smoke-trained
+on the asymmetric data; trains cleanly. The `--keep` flag selects the input width
+so the 256 / 384 / 512 ablations he asked about are a one-line change.
+
 ## 2026-07-29 — New asymmetric-army games: parser fix + engine re-evaluation
 
 ### 1. Parser handles pieces omitted from VariantMen (built-in rules)
