@@ -80,3 +80,10 @@ data/games_new/
 data/piece_values_cp.json
 *.xls
 *.xlsx
+
+# big-database parsed dataset, logs, registry (large / derived from Zied's
+# confidential PGNs — never publish; regenerable via scripts/parse_bigdb.py)
+data/bigdb/
+
+# research paper (client deliverable, kept local / in the ZIP, not public)
+paper/

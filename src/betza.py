@@ -58,7 +58,7 @@ COMPOUND: dict[str, str] = {
     "K": "WF",  # king   = one-step wazir + ferz (all 8, range 1)
 }
 
-DIRECTION_LETTERS = set("fblrvs")
+DIRECTION_LETTERS = set("fblrvsh")  # h == sideways (l+r), like s
 MODIFIER_LETTERS = set("mcinep")  # move/capture/initial/nonjump/enpassant/hopper
 
 
@@ -193,7 +193,7 @@ def _parse_term(term: str) -> list[MoveComponent]:
             wanted = set(dirs)
             if "v" in wanted:
                 wanted |= {"f", "b"}
-            if "s" in wanted:
+            if "s" in wanted or "h" in wanted:   # s and h both == sideways (l+r)
                 wanted |= {"l", "r"}
             vectors = [v for v in vectors if _classify(*v) & wanted]
 

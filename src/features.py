@@ -32,8 +32,9 @@ import math
 
 import numpy as np
 
-from betza import Piece, generate_targets
+from betza import Piece, parse_piece, generate_targets
 from musketeer import Board, WHITE, BLACK
+import betza_id as BID
 
 # Authoritative Musketeer piece values, taken from the Musketeer Stockfish
 # engine source (`types.h`, midgame values on a Pawn=171 scale) and normalised
@@ -143,54 +144,186 @@ def gating_finished(board: Board) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Betza-derived per-piece geometry (Model 3, Milestone 4)
+# Betza-derived per-piece geometry — IDENTITY-INDEPENDENT (Model 3)
 # --------------------------------------------------------------------------- #
-# Computed once per piece type on an EMPTY board with the piece on e4 = (4, 3),
-# exactly as the contract describes:
-#   * number of controlled squares at distance 1, 2, 3, 4 (Chebyshev distance);
-#   * colour-boundness = (# controlled squares of e4's colour) / (total);
-#   * infinite-range flag (does the piece have an unlimited rider, like a queen).
+# Geometry is a pure function of the *rule*, never the letter.  It is computed on
+# an EMPTY board from e4 = (4, 3) by walking the parsed move components directly
+# (not the occupancy simulator), so that move-only and capture-only reachability
+# can be measured separately and no special rule is silently dropped.
+#
+# The cache is keyed on the rule's canonical signature (see betza_id), which is
+# what fixes the old cross-variant bug: the same LETTER can mean different rules
+# in different variants (e.g. T:AF vs T:BW vs T:vCnD), and a letter-keyed cache
+# would hand one variant another variant's geometry.
+#
+# Feature set (identity-independent; the client's original 8 plus the special-
+# rule signals he asked us not to lose):
+#   d1..d4              controlled squares at Chebyshev distance 1..4
+#   total               total controlled squares (move OR capture)
+#   colour_boundness    fraction of controlled squares on e4's colour
+#   infinite            has an unlimited rider (queen-like)
+#   directions          distinct primitive move directions (knight=8, bishop=4)
+#   move_total          squares reachable by a QUIET move  (0 => capture-only)
+#   capture_total       squares reachable by a CAPTURE     (0 => move-only)
+#   is_hopper           needs a screen to move (cannon-like)
+#   is_lame             non-jumping / lame leaper (blockable midpoint)
+#   forward_ratio       fraction of controlled squares that are forward (dy>0)
 E4 = (4, 3)
-# 8th feature "directions" = number of distinct directions the piece can move in
-# (knight=8, bishop=4, ...), matching the client's relative-value methodology.
 GEOM_KEYS = ("d1", "d2", "d3", "d4", "total", "colour_boundness",
-             "infinite", "directions")
+             "infinite", "directions")                       # legacy 8 (kept)
+GEO_KEYS = GEOM_KEYS + ("move_total", "capture_total",
+                        "is_hopper", "is_lame", "forward_ratio")   # 13 total
+
+# cache is keyed by canonical signature (identity-independent), not by letter.
+_GEOM_CACHE: dict[tuple, dict[str, float]] = {}
 
 
-_GEOM_CACHE: dict[str, dict[str, float]] = {}
+def _component_squares(comp) -> set[tuple[int, int]]:
+    """Squares a single component reaches from e4 on an empty board.  Hoppers
+    need a screen, so they contribute no squares here (flagged separately)."""
+    out: set[tuple[int, int]] = set()
+    if comp.hopper:
+        return out
+    steps = comp.max_range if (comp.rider and comp.max_range > 0) else (
+        7 if comp.rider else 1)
+    for (dx, dy) in comp.vectors:
+        for s in range(1, steps + 1):
+            f, r = E4[0] + dx * s, E4[1] + dy * s
+            if not (0 <= f < 8 and 0 <= r < 8):
+                break
+            out.add((f, r))
+    return out
 
 
-def piece_geometry(piece: Piece) -> dict[str, float]:
-    cached = _GEOM_CACHE.get(piece.letter)
-    if cached is not None:
-        return cached
-    targets = generate_targets(piece, E4[0], E4[1], WHITE, occupied=None,
-                               has_moved=True)
+def geometry_of_components(components) -> dict[str, float]:
+    """Compute the identity-independent geometry dict from parsed components."""
+    move_sqs: set[tuple[int, int]] = set()
+    cap_sqs: set[tuple[int, int]] = set()
+    infinite = hopper = lame = False
+    for c in components:
+        sqs = _component_squares(c)
+        if c.can_move:
+            move_sqs |= sqs
+        if c.can_capture:
+            cap_sqs |= sqs
+        if c.rider and c.max_range == 0:
+            infinite = True
+        if c.hopper:
+            hopper = True
+        if c.non_jumping:
+            lame = True
+    allsq = move_sqs | cap_sqs
+    total = len(allsq)
     dist = collections.Counter(max(abs(tf - E4[0]), abs(tr - E4[1]))
-                               for tf, tr in targets)
-    total = len(targets)
+                               for tf, tr in allsq)
     e4_parity = (E4[0] + E4[1]) % 2
-    bound = sum(1 for tf, tr in targets if (tf + tr) % 2 == e4_parity)
-    infinite = any(c.rider and c.max_range == 0 for c in piece.components)
-    # distinct directions: reduce every controlled vector to its primitive
-    # direction (divide by gcd) so a slider's ray counts once, then count.
+    bound = sum(1 for tf, tr in allsq if (tf + tr) % 2 == e4_parity)
     prim = set()
-    for tf, tr in targets:
+    for tf, tr in allsq:
         dx, dy = tf - E4[0], tr - E4[1]
         gg = math.gcd(abs(dx), abs(dy)) or 1
         prim.add((dx // gg, dy // gg))
-    g = {
+    fwd = sum(1 for tf, tr in allsq if tr > E4[1])
+    return {
         "d1": dist.get(1, 0), "d2": dist.get(2, 0),
         "d3": dist.get(3, 0), "d4": dist.get(4, 0),
         "total": total,
         "colour_boundness": (bound / total) if total else 0.0,
         "infinite": 1.0 if infinite else 0.0,
         "directions": len(prim),
+        "move_total": len(move_sqs),
+        "capture_total": len(cap_sqs),
+        "is_hopper": 1.0 if hopper else 0.0,
+        "is_lame": 1.0 if lame else 0.0,
+        "forward_ratio": (fwd / total) if total else 0.0,
     }
-    _GEOM_CACHE[piece.letter] = g
+
+
+def rule_geometry(betza: str) -> dict[str, float]:
+    """Identity-independent geometry for a Betza rule (cached by fingerprint)."""
+    sig = BID.canonical_signature(betza)
+    g = _GEOM_CACHE.get(sig)
+    if g is None:
+        g = geometry_of_components(parse_piece("?", betza).components)
+        _GEOM_CACHE[sig] = g
     return g
 
 
+def piece_geometry(piece: Piece) -> dict[str, float]:
+    """Geometry for an already-parsed Piece; cached by the piece's RULE
+    signature so two letters with the same rule share one entry and a reused
+    letter with a different rule never collides."""
+    sig = BID.signature_of_piece(piece)
+    g = _GEOM_CACHE.get(sig)
+    if g is None:
+        g = geometry_of_components(piece.components)
+        _GEOM_CACHE[sig] = g
+    return g
+
+
+# --------------------------------------------------------------------------- #
+# Identity-independent Model-3 geometry encoder (canonical-id slots).
+#
+# The original Model 3 laid its geometry block out with one slot per LETTER
+# (MODEL3_TYPES).  That ties the input to the alphabet, so T:DW and V:DW would
+# land in different slots.  This version indexes the block by the rule's
+# CANONICAL ID from the frozen registry: same rule -> same slot, always, and the
+# letter is used only to look the rule up.  Width is derived from the registry.
+# --------------------------------------------------------------------------- #
+N_GEO = len(GEO_KEYS)                                     # 13 geometry features
+GEO_SCALE = {"d1": 8.0, "d2": 8.0, "d3": 8.0, "d4": 8.0, "total": 27.0,
+             "colour_boundness": 1.0, "infinite": 1.0, "directions": 16.0,
+             "move_total": 27.0, "capture_total": 27.0,
+             "is_hopper": 1.0, "is_lame": 1.0, "forward_ratio": 1.0}
+
+_GEO_REG = None            # frozen BetzaRegistry used by the identity-free encoders
+
+
+def set_geo_registry(reg) -> None:
+    """Install the frozen registry the identity-independent encoders index by."""
+    global _GEO_REG
+    _GEO_REG = reg
+
+
+def n_features_geo(reg=None) -> int:
+    reg = reg or _GEO_REG
+    return 64 + reg.num_types * N_GEO + 16       # board + per-rule geometry + gating
+
+
+def encode_board_geo(board: Board, betza_map: dict, reg) -> np.ndarray:
+    """Model-3, identity-independent: board material (64) + per-canonical-rule
+    geometry x signed count (num_types x 13) + gating cp per file (16)."""
+    ntypes = reg.num_types
+    x = np.zeros(64 + ntypes * N_GEO + 16, dtype=np.float32)
+    stm = board.side
+    gate_base = 64 + ntypes * N_GEO
+
+    for (f, r), (letter, color) in board.board.items():
+        of, orr = _orient(f, r, stm)
+        sign = 1.0 if color == stm else -1.0
+        x[orr * 8 + of] = sign * _val(letter) / SCALE
+        betza = betza_map.get(letter, "")
+        rid = reg.id_of(betza)                    # rule id, NOT the letter
+        if rid >= ntypes:                         # unseen rule (registry not frozen on it)
+            continue
+        g = rule_geometry(betza)
+        base = 64 + rid * N_GEO
+        for ki, k in enumerate(GEO_KEYS):
+            x[base + ki] += sign * (g[k] / GEO_SCALE[k])
+
+    for f, letter in board.white_wait.items():
+        x[gate_base + f] += (1.0 if WHITE == stm else -1.0) * _val(letter) / SCALE
+    for f, letter in board.black_wait.items():
+        x[gate_base + 8 + f] += (1.0 if BLACK == stm else -1.0) * _val(letter) / SCALE
+    return x
+
+
+def encode_fen_geo(fen: str, variant_men: str) -> np.ndarray:
+    return encode_board_geo(Board.from_fen(fen, variant_men),
+                            _betza_map(variant_men), _GEO_REG)
+
+
+# ---- legacy letter-slot Model 3 (kept for backward compatibility) ---------- #
 # Piece types this variant fields, in a fixed order for the feature layout.
 MODEL3_TYPES = ("P", "N", "B", "R", "Q", "K", "H", "U")
 _GEOM_SCALE = {"d1": 8.0, "d2": 8.0, "d3": 8.0, "d4": 8.0, "total": 27.0,
