@@ -99,6 +99,63 @@ def canonical_fingerprint(betza: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Two "8-integer" representations of a rule (client-requested, in addition to
+# the dense id the network uses). Neither is used for network indexing, so they
+# add no cost and require no retraining — they are alternative labels only.
+# --------------------------------------------------------------------------- #
+def code8(i: int) -> str:
+    """The dense id as a fixed-width 8-digit zero-padded code, matching the
+    client's examples: K=00000000, Q=00000001, R=00000002, B=00000003,
+    N=00000004, P=00000005, then 00000006, 00000007, ...  Use with a registry:
+    ``code8(reg.id_of(betza))``."""
+    return f"{int(i):08d}"
+
+
+# vector8 slot meanings (each counts DISTINCT move primitives in that family):
+VECTOR8_SLOTS = ("rook_rays", "bishop_rays", "other_riders", "wazir_steps",
+                 "ferz_steps", "knight_class_leaps", "long_jumps", "special_prims")
+
+
+def vector8(betza: str) -> tuple:
+    """An identity-independent 8-integer *structural* signature of a Betza rule.
+
+    Computed from the canonical signature, so it automatically collapses
+    BN=NB, Q=RB=BR, K=WF, cef=ecf, v=f+b, s=l+r=h.  Each slot counts distinct
+    move primitives in a family (see VECTOR8_SLOTS):
+      0 rook_rays          unlimited orthogonal rider rays  (R)
+      1 bishop_rays        unlimited diagonal rider rays    (B)
+      2 other_riders       range-limited or oblique riders
+      3 wazir_steps        one-square orthogonal leaps      (W)
+      4 ferz_steps         one-square diagonal leaps        (F)
+      5 knight_class_leaps oblique leaps |dx|!=|dy|         (N,C,Z)
+      6 long_jumps         (k,0)/(k,k) jumps, k>=2          (D,H,A,G)
+      7 special_prims      primitives with move/capture-only, hopper, lame,
+                           initial-only or en-passant flags
+    """
+    v = [0] * 8
+    for (dx, dy, rider, rng, mv, cap, init, nj, ep, hop) in canonical_signature(betza):
+        adx, ady = abs(dx), abs(dy)
+        if rider:
+            if (dx == 0 or dy == 0) and rng == 0:
+                v[0] += 1
+            elif adx == ady and rng == 0:
+                v[1] += 1
+            else:
+                v[2] += 1
+        elif (adx, ady) in ((1, 0), (0, 1)):
+            v[3] += 1
+        elif adx == 1 and ady == 1:
+            v[4] += 1
+        elif adx != ady and adx > 0 and ady > 0:
+            v[5] += 1
+        else:
+            v[6] += 1
+        if (not mv) or (not cap) or hop or nj or init or ep:
+            v[7] += 1
+    return tuple(v)
+
+
+# --------------------------------------------------------------------------- #
 # Stable integer ids (HalfKP / HalfKA "piece type" dimension)
 # --------------------------------------------------------------------------- #
 # The six standard pieces are pinned to small readable ids exactly as the client
@@ -153,6 +210,10 @@ class BetzaRegistry:
     def get(self, betza: str, default: int | None = None):
         """Return the id for a rule without mutating the registry."""
         return self.sig_to_id.get(canonical_signature(betza), default)
+
+    def code8(self, betza: str) -> str:
+        """The rule's dense id as an 8-digit zero-padded code (K=00000000, ...)."""
+        return code8(self.id_of(betza))
 
     def __len__(self) -> int:
         return self._next
@@ -280,6 +341,13 @@ if __name__ == "__main__":
     print(f"  [{'OK ' if i_bn == i_nb else 'FAIL'}] id(BN)==id(NB)=={i_bn}")
     print(f"  [{'OK ' if i_cr >= 6 else 'FAIL'}] id(cR)=={i_cr} (custom, distinct from R=2)")
     ok = ok and i_bn == i_nb and i_cr >= 6
+
+    # Two extra "8-integer" representations offered alongside the dense id.
+    print("\n  8-integer options (dense id | code8 | vector8):")
+    for lbl in STANDARD_ORDER + ["BN", "NB", "RB"]:
+        r = STANDARD_BETZA.get(lbl, lbl)
+        i = reg.id_of(r)
+        print(f"    {lbl:<3} id={i:<3} code8={code8(i)} vector8={vector8(r)}")
 
     print("\nALL PASS" if ok else "\nSOME CHECKS FAILED")
     raise SystemExit(0 if ok else 1)
