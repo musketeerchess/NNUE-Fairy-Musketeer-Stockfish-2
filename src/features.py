@@ -323,6 +323,42 @@ def encode_fen_geo(fen: str, variant_men: str) -> np.ndarray:
                             _betza_map(variant_men), _GEO_REG)
 
 
+# --------------------------------------------------------------------------- #
+# "Ultra" dense features: gating + Betza geometry only (no raw material plane).
+# Used as the dense branch of the Ultra model, which pairs it with HalfKA.
+# --------------------------------------------------------------------------- #
+def n_features_gatebetza(reg=None) -> int:
+    reg = reg or _GEO_REG
+    return reg.num_types * N_GEO + 16          # per-rule geometry + gating (16)
+
+
+def encode_board_gatebetza(board: Board, betza_map: dict, reg) -> np.ndarray:
+    ntypes = reg.num_types
+    x = np.zeros(ntypes * N_GEO + 16, dtype=np.float32)
+    stm = board.side
+    gate_base = ntypes * N_GEO
+    for (f, r), (letter, color) in board.board.items():
+        sign = 1.0 if color == stm else -1.0
+        betza = betza_map.get(letter, "")
+        rid = reg.id_of(betza)
+        if rid >= ntypes:
+            continue
+        g = rule_geometry(betza)
+        base = rid * N_GEO
+        for ki, k in enumerate(GEO_KEYS):
+            x[base + ki] += sign * (g[k] / GEO_SCALE[k])
+    for f, letter in board.white_wait.items():
+        x[gate_base + f] += (1.0 if WHITE == stm else -1.0) * _val(letter) / SCALE
+    for f, letter in board.black_wait.items():
+        x[gate_base + 8 + f] += (1.0 if BLACK == stm else -1.0) * _val(letter) / SCALE
+    return x
+
+
+def encode_fen_gatebetza(fen: str, variant_men: str) -> np.ndarray:
+    return encode_board_gatebetza(Board.from_fen(fen, variant_men),
+                                  _betza_map(variant_men), _GEO_REG)
+
+
 # ---- legacy letter-slot Model 3 (kept for backward compatibility) ---------- #
 # Piece types this variant fields, in a fixed order for the feature layout.
 MODEL3_TYPES = ("P", "N", "B", "R", "Q", "K", "H", "U")

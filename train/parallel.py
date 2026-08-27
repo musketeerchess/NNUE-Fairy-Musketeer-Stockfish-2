@@ -52,7 +52,7 @@ class _Encoder:
         self.reg = reg
         self.king_buckets = spec.get("king_buckets", 16)
         self.last_vm = None
-        self.needs_material = self.kind in ("dense", "hybrid")
+        self.needs_material = self.kind in ("dense", "hybrid", "ultra")
         if self.kind == "dense":
             enc = spec["encoding"]
             if enc == "geo":
@@ -69,7 +69,7 @@ class _Encoder:
                 raise ValueError(enc)
         elif self.kind in ("halfka", "halfkp"):
             self.include_kings = (self.kind == "halfka")
-        elif self.kind == "hybrid":
+        elif self.kind in ("hybrid", "ultra"):
             F.set_geo_registry(reg)
         else:
             raise ValueError(self.kind)
@@ -86,9 +86,12 @@ class _Encoder:
             f = FK.board_features(board, self.reg, self.king_buckets,
                                   self.include_kings)
             return ((f["own"], f["opp"], f["stage"]), tgt)
-        # hybrid
+        # hybrid (geometry+material dense) or ultra (gating+Betza dense)
         board = Board.from_fen(rec["fen"], vm)
-        dense = F.encode_board_geo(board, F._betza_map(vm), self.reg).astype(np.float32)
+        if self.kind == "hybrid":
+            dense = F.encode_board_geo(board, F._betza_map(vm), self.reg).astype(np.float32)
+        else:  # ultra
+            dense = F.encode_board_gatebetza(board, F._betza_map(vm), self.reg).astype(np.float32)
         f = FK.board_features(board, self.reg, self.king_buckets, True)
         return ((dense, f["own"], f["opp"], f["stage"]), tgt)
 
@@ -98,7 +101,7 @@ class _Encoder:
 # --------------------------------------------------------------------------- #
 class EncodingIterable(IterableDataset):
     def __init__(self, data, variants, reg, spec, val_keep, train_keep,
-                 chunk_lines=250_000, seed=1, mode="train"):
+                 chunk_lines=250_000, seed=1, mode="train", vm_filter=None):
         super().__init__()
         self.data = data
         self.variants = variants
@@ -109,6 +112,7 @@ class EncodingIterable(IterableDataset):
         self.chunk_lines = chunk_lines
         self.seed = seed
         self.mode = mode                    # "train" (strided+shuffled) or "val"
+        self.vm_filter = set(vm_filter) if vm_filter is not None else None
 
     def __iter__(self):
         info = get_worker_info()
@@ -147,6 +151,8 @@ class EncodingIterable(IterableDataset):
                     continue
                 if rec.get("result_stm") is None:
                     continue
+                if self.vm_filter is not None and rec.get("vm") not in self.vm_filter:
+                    continue                       # restrict to a chosen army
                 buf.append(rec)
                 if len(buf) >= self.chunk_lines:
                     yield from drain()
@@ -190,4 +196,5 @@ def collate_hybrid(samples):
 
 
 COLLATE = {"dense": collate_dense, "halfka": collate_halfka,
-           "halfkp": collate_halfka, "hybrid": collate_hybrid}
+           "halfkp": collate_halfka, "hybrid": collate_hybrid,
+           "ultra": collate_hybrid}
