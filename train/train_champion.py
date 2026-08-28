@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--save-every", type=int, default=200)
+    ap.add_argument("--max-positions", type=int, default=0,
+                    help="stop after this many positions (0 = full pass)")
     ap.add_argument("--resume-from", default="")
     ap.add_argument("--out", default="models/experiments/champion_FULL.pt")
     ap.add_argument("--log-every", type=int, default=100)
@@ -105,6 +107,8 @@ def main():
                       f"clip[{lo:.2f},{hi:.2f}]  {el/60:.1f} min", flush=True)
             if nb % args.save_every == 0:
                 save("partial", {"epoch": ep - 1, "partial_pos": seen, "full_data": True})
+            if args.max_positions and seen >= args.max_positions:
+                break
         model.eval(); tot = 0.0; n = 0
         with torch.no_grad():
             for inp, S in make_loader("val", 99):
