@@ -79,28 +79,43 @@ python train/experiments.py --exp crossarmy --budget 5000000  --crossarmy-n 5 --
 ---
 
 ## 4. Train the champion on the full data (the main GPU job)
-```
-python train/train_champion.py --epochs 2 --workers <cores>
-```
-Auto-picks the best config from `models/experiments/champion.json` (the
-1024-wide hybrid with the learnable activation and the 64/64 head) and trains it
-on the full dataset, checkpointing to `models/experiments/champion_FULL.pt`.
-`--resume-from <ckpt>` continues; `--max-positions N` bounds the pass.
 
-**Important lesson from the CPU run.** At full width the champion started to
-overfit with extended training at a constant learning rate: its training loss
-fell well below its validation loss. On a GPU with far more data this is exactly
-what capacity is waiting for, but to be safe the full run should add:
-- a learning-rate schedule (cosine or step decay),
-- early stopping on the validation loss,
-- optionally weight decay and/or dropout in the head.
-These knobs are small additions to `train/train_champion.py` — say the word and I
-will wire them in, or your team can. Watch the train-vs-val gap and stop when
-validation stops improving.
+Recommended command for a multi-card GPU box (e.g. RTX 5080):
+```
+python train/train_champion.py --epochs 2 --workers <cores> --dense-ft \
+    --batch 16384 --lr-decay-positions 100000000 --weight-decay 1e-4 \
+    --val-every 500 --patience 5
+```
+It auto-picks the best config from `models/experiments/champion.json` (the
+1024-wide hybrid with the learnable activation and the 64/64 head) and trains it
+on the full dataset. It uses the GPU automatically (override with
+`--device cuda:0`); `--resume-from <ckpt>` continues; `--max-positions N` bounds
+the pass.
+
+The anti-overfitting safeguards (added because the constant-rate CPU run began to
+overfit, its training loss dropping below its validation loss) are now built in:
+- `--lr-decay-positions N` — cosine-anneal the learning rate to ~0 over N
+  positions (0 = constant).
+- `--val-every N` + `--patience K` — validate every N batches and stop after K
+  validations with no improvement.
+- `--weight-decay` — L2 regularisation on the head.
+- `--dense-ft` — dense feature transformer with a single Adam optimiser, simpler
+  and reliable on GPU (the sparse EmbeddingBag + SparseAdam path is the CPU
+  default; drop `--dense-ft` to use it).
+
+Two checkpoints are written: the latest (`champion_FULL.pt`) and the
+best-validation model (`champion_FULL.pt.best.pt`) — deliver the best one.
+
+**GPU notes.** A single 5080 (16 GB) holds the 1024-wide model and Adam state
+comfortably, so one card is enough; the encoder (CPU, `--workers`) is the real
+throughput limiter, so set `--workers` to your core count and use a large
+`--batch`. Two cards give little here because the pipeline is encode-bound, not
+compute-bound, so I would run on one card (`--device cuda:0`) and keep the second
+free for your parallel symmetric-army experiment.
 
 Validate any checkpoint:
 ```
-python train/eval_checkpoint.py models/experiments/champion_FULL.pt
+python train/eval_checkpoint.py models/experiments/champion_FULL.pt.best.pt
 ```
 
 ---

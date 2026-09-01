@@ -23,16 +23,18 @@ from activations import make_activation
 class NNUENet(nn.Module):
     def __init__(self, num_features: int, dim: int = 256, head=(64, 32),
                  buckets: int = 3, dense_in: int = 0, act: str = "clip",
-                 lo_init: float = -1.0, hi_init: float = 4.0):
+                 lo_init: float = -1.0, hi_init: float = 4.0, sparse: bool = True):
         super().__init__()
         self.dim = dim
         self.buckets = buckets
         self.dense_in = dense_in
         self.act_kind = act
         self.head_cfg = tuple(head)
-        # sparse gradients: only the rows touched by a batch get updated, which
-        # is what keeps a large feature transformer (e.g. dim 1024) trainable.
-        self.ft = nn.EmbeddingBag(num_features, dim, mode="sum", sparse=True)
+        self.sparse = sparse
+        # sparse gradients update only the rows a batch touches, which keeps a
+        # large feature transformer trainable on CPU (SparseAdam). On a GPU the
+        # dense form (sparse=False, plain Adam) is simple and fits in VRAM.
+        self.ft = nn.EmbeddingBag(num_features, dim, mode="sum", sparse=sparse)
         # one activation instance per accumulator use; learnable variant shares params
         self.act = make_activation(act, lo_init, hi_init)
         if dense_in:

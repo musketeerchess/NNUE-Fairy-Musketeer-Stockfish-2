@@ -42,7 +42,7 @@ def keep_awake():
         pass
 
 
-def build(cfg, reg, dev):
+def build(cfg, reg, dev, sparse=True):
     n_feat = FK.num_features(reg, cfg["king_buckets"])
     if cfg["kind"] in ("halfka", "halfkp"):
         dense_in = 0
@@ -51,7 +51,7 @@ def build(cfg, reg, dev):
     else:  # ultra
         F.set_geo_registry(reg); dense_in = F.n_features_gatebetza(reg)
     return NNUENet(n_feat, dim=cfg["dim"], head=tuple(cfg["head"]), buckets=3,
-                   dense_in=dense_in, act=cfg["act"]).to(dev)
+                   dense_in=dense_in, act=cfg["act"], sparse=sparse).to(dev)
 
 
 def forward(model, inp, kind):
