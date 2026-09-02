@@ -133,7 +133,20 @@ draw, e.g. a lone Unicorn vs a bare king — keep) or `advantage_not_converted`
 
 ---
 
-## 6. Suggested order for a full-scale pass
+## 6b. Elo tournament (measure play strength)
+```
+python elo_arena.py --games 100 --move-cap 200 --depth 2 --out elo_report.json
+```
+Plays a round-robin between the models (through the engine arbiter, from the
+opening book, colours alternating), records win/draw/loss, and fits Elo ratings
+by maximum likelihood with a standard error for each. Validation loss is only a
+proxy for strength; this is the real measure. For meaningful separation use many
+games per pair (100+), a high move cap, and depth 2 or more. This is the "large
+tests on client computer" job: the harness is the same at any scale, it just
+wants a lot of games, which is where the GPU box helps. The model list is set in
+`arena.py::load_players` (point it at the checkpoints you want to rate).
+
+## 7. Suggested order for a full-scale pass
 1. Parse the full database (Step 1).
 2. Run the quality check on the source games (Step 5) and drop the
    `advantage_not_converted` games.
